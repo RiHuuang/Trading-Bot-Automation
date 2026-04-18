@@ -5,7 +5,7 @@ import random
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
-from core.binance_client import BinanceRESTClient, load_binance_config
+from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
 from core.schemas import ExecutionOrder, OrderFill
 
 
@@ -15,6 +15,7 @@ class ExecutionAgent(BaseAgent):
         self.processed_orders: set[str] = set()
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
+        self.symbol_map = load_symbol_map()
         self.validate_only = os.getenv("BINANCE_VALIDATE_ONLY", "true").lower() == "true"
 
     async def execute_order(self, data):
@@ -39,7 +40,7 @@ class ExecutionAgent(BaseAgent):
             try:
                 broker_response = await asyncio.to_thread(
                     self.binance.place_market_order,
-                    symbol=self.binance_config.symbol,
+                    symbol=self.symbol_map.get(order.ticker, self.binance_config.symbol),
                     side=order.action,
                     quantity=order.quantity,
                     client_order_id=order.order_id,

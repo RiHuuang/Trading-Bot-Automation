@@ -38,6 +38,17 @@ services:
       - redis
     restart: always
 
+  scout_agent:
+    build: .
+    command: python services/scout_agent/scout_agent.py
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always
+
   review_agent:
     build: .
     command: python services/review_agent/review_agent.py

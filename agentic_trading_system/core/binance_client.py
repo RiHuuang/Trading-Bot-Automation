@@ -31,6 +31,15 @@ class SymbolInfo:
     min_notional: float | None = None
 
 
+@dataclass
+class OrderBookSnapshot:
+    best_bid: float
+    best_ask: float
+    bid_notional_top_n: float
+    ask_notional_top_n: float
+    spread_bps: float
+
+
 def load_binance_config() -> BinanceConfig:
     env = os.getenv("BINANCE_ENV", "testnet").lower()
     symbol = os.getenv("BINANCE_SYMBOL", "BTCUSDT").upper()
@@ -52,6 +61,20 @@ def load_binance_config() -> BinanceConfig:
         market_ws_base=market_ws_base,
         rest_base=rest_base,
     )
+
+
+def load_symbol_map() -> dict[str, str]:
+    configured = os.getenv("BINANCE_SYMBOLS", os.getenv("BINANCE_SYMBOL", "BTCUSDT"))
+    mapping: dict[str, str] = {}
+    for raw_symbol in [item.strip().upper() for item in configured.split(",") if item.strip()]:
+        if raw_symbol.endswith("USDT"):
+            base_asset = raw_symbol[: -4]
+        elif raw_symbol.endswith("IDR"):
+            base_asset = raw_symbol[: -3]
+        else:
+            base_asset = raw_symbol
+        mapping[base_asset] = raw_symbol
+    return mapping
 
 
 class BinanceRESTClient:
@@ -116,6 +139,44 @@ class BinanceRESTClient:
         )
         response.raise_for_status()
         return float(response.json()["price"])
+
+    def get_depth(self, symbol: str | None = None, limit: int = 20) -> OrderBookSnapshot:
+        response = self.session.get(
+            f"{self.config.rest_base}/api/v3/depth",
+            params={"symbol": symbol or self.config.symbol, "limit": limit},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        best_bid = float(payload["bids"][0][0])
+        best_ask = float(payload["asks"][0][0])
+        bid_notional_top_n = sum(float(price) * float(qty) for price, qty in payload["bids"])
+        ask_notional_top_n = sum(float(price) * float(qty) for price, qty in payload["asks"])
+        mid = (best_bid + best_ask) / 2
+        spread_bps = ((best_ask - best_bid) / mid) * 10000 if mid > 0 else 0.0
+        return OrderBookSnapshot(
+            best_bid=best_bid,
+            best_ask=best_ask,
+            bid_notional_top_n=bid_notional_top_n,
+            ask_notional_top_n=ask_notional_top_n,
+            spread_bps=spread_bps,
+        )
+
+    def get_24h_tickers(self, symbols: list[str] | None = None) -> list[dict]:
+        params = {}
+        if symbols:
+            if len(symbols) == 1:
+                params["symbol"] = symbols[0]
+            else:
+                params["symbols"] = str(symbols).replace("'", '"')
+        response = self.session.get(
+            f"{self.config.rest_base}/api/v3/ticker/24hr",
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, list) else [payload]
 
     def place_market_order(
         self,

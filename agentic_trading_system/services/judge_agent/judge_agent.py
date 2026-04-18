@@ -8,6 +8,8 @@ from google.genai import types
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
+from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
+from core.market_context import fetch_timeframe_context, format_timeframe_context
 from core.schemas import JudgeDecision, JudgeDecisionDraft, ProposalReview, TradeProposal
 
 load_dotenv()
@@ -20,6 +22,27 @@ class JudgeAgent(BaseAgent):
         self.model_name = os.getenv("JUDGE_MODEL", "gemini-2.5-flash")
         self.proposals: dict[str, TradeProposal] = {}
         self.reviews: dict[str, ProposalReview] = {}
+        self.binance_config = load_binance_config()
+        self.binance = BinanceRESTClient(self.binance_config)
+        self.symbol_map = load_symbol_map()
+
+    def get_higher_timeframe_context(self, proposal: TradeProposal) -> str:
+        symbol = self.symbol_map.get(proposal.ticker, self.binance_config.symbol)
+        contexts = []
+        for interval in ("1h", "4h"):
+            try:
+                context = fetch_timeframe_context(
+                    client=self.binance,
+                    symbol=symbol,
+                    base_asset=proposal.ticker,
+                    interval=interval,
+                )
+            except Exception as exc:
+                print(f"[JudgeAgent] Failed loading {interval} context for {proposal.ticker}: {exc}")
+                context = None
+            if context is not None:
+                contexts.append(context)
+        return format_timeframe_context(contexts)
 
     async def cache_proposal(self, data):
         try:
@@ -52,8 +75,9 @@ class JudgeAgent(BaseAgent):
 
     async def issue_decision(self, proposal: TradeProposal, review: ProposalReview):
         snapshot = proposal.market_snapshot
+        higher_timeframes = self.get_higher_timeframe_context(proposal)
         prompt = f"""
-You are the judge agent on a BTC trading desk.
+You are the judge agent on a systematic crypto trading desk.
 Decide whether to APPROVE, REJECT, or request NEEDS_MORE_DATA.
 Be conservative. Reject trades when the critic found valid blocking concerns.
 
@@ -83,9 +107,13 @@ Market snapshot:
 - Bollinger bandwidth: {snapshot.bollinger_bandwidth:.2f}
 - 20-bar volatility: {snapshot.volatility_20:.4%}
 
+Higher timeframe context:
+{higher_timeframes}
+
 Decision policy:
 - REJECT if the review is blocking.
 - REJECT if proposal confidence is below 0.60.
+- REJECT if 15m direction materially conflicts with both 1h and 4h context.
 - NEEDS_MORE_DATA if signals are mixed but not clearly wrong.
 - APPROVE only BUY or SELL actions, never HOLD.
         """

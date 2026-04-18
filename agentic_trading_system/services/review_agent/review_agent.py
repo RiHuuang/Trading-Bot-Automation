@@ -8,6 +8,8 @@ from google.genai import types
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
+from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
+from core.market_context import fetch_timeframe_context, format_timeframe_context
 from core.schemas import ProposalReview, ProposalReviewDraft, TradeProposal
 
 load_dotenv()
@@ -18,6 +20,27 @@ class ReviewAgent(BaseAgent):
         super().__init__("ReviewAgent")
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_name = os.getenv("REVIEW_MODEL", "gemini-2.5-flash")
+        self.binance_config = load_binance_config()
+        self.binance = BinanceRESTClient(self.binance_config)
+        self.symbol_map = load_symbol_map()
+
+    def get_higher_timeframe_context(self, proposal: TradeProposal) -> str:
+        symbol = self.symbol_map.get(proposal.ticker, self.binance_config.symbol)
+        contexts = []
+        for interval in ("1h", "4h"):
+            try:
+                context = fetch_timeframe_context(
+                    client=self.binance,
+                    symbol=symbol,
+                    base_asset=proposal.ticker,
+                    interval=interval,
+                )
+            except Exception as exc:
+                print(f"[ReviewAgent] Failed loading {interval} context for {proposal.ticker}: {exc}")
+                context = None
+            if context is not None:
+                contexts.append(context)
+        return format_timeframe_context(contexts)
 
     async def review_proposal(self, data):
         try:
@@ -27,8 +50,9 @@ class ReviewAgent(BaseAgent):
             return
 
         snapshot = proposal.market_snapshot
+        higher_timeframes = self.get_higher_timeframe_context(proposal)
         prompt = f"""
-You are the critic agent on a BTC trading desk.
+You are the critic agent on a systematic crypto trading desk.
 Your job is to challenge weak trade ideas and block trades that are under-evidenced.
 
 Proposal under review:
@@ -51,8 +75,12 @@ Market snapshot:
 - 20-bar return: {snapshot.returns_20:.4%}
 - 20-bar volatility: {snapshot.volatility_20:.4%}
 
+Higher timeframe context:
+{higher_timeframes}
+
 Review policy:
 - Prefer CHALLENGE when trend and momentum disagree.
+- Prefer CHALLENGE when 15m trade direction fights the 1h or 4h context.
 - Prefer CHALLENGE when confidence appears overstated.
 - Prefer CHALLENGE when action is BUY or SELL but the evidence is mixed.
 - Use SUPPORT only when the proposal is coherent, calibrated, and aligned with the snapshot.
