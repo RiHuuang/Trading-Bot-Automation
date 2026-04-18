@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Ops Dashboard</title>
+  <style>
+    :root {
+      --bg: #09111f;
+      --panel: #101b2d;
+      --panel-2: #13233a;
+      --text: #ebf2ff;
+      --muted: #97a8c4;
+      --good: #38c793;
+      --warn: #ffb020;
+      --bad: #ff5d73;
+      --accent: #4da3ff;
+      --border: #203552;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(77,163,255,.15), transparent 26%),
+        radial-gradient(circle at top right, rgba(56,199,147,.12), transparent 20%),
+        linear-gradient(180deg, #0a1220 0%, #08101d 100%);
+      color: var(--text);
+    }
+    .wrap {
+      width: min(1400px, calc(100% - 32px));
+      margin: 24px auto 48px;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: .02em;
+    }
+    .title p {
+      margin: 6px 0 0;
+      color: var(--muted);
+    }
+    .status-badges {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .badge {
+      border: 1px solid var(--border);
+      background: rgba(16, 27, 45, .86);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .badge strong { color: var(--text); }
+    .ok { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(77,163,255,.18), rgba(77,163,255,.08));
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 12px;
+      font: inherit;
+      cursor: pointer;
+      transition: transform .12s ease, border-color .12s ease, opacity .12s ease;
+    }
+    .btn:hover { transform: translateY(-1px); border-color: var(--accent); }
+    .btn:disabled { opacity: .6; cursor: wait; transform: none; }
+    .btn-danger {
+      background: linear-gradient(180deg, rgba(255,93,115,.2), rgba(255,93,115,.08));
+      border-color: rgba(255,93,115,.35);
+    }
+    .btn-safe {
+      background: linear-gradient(180deg, rgba(56,199,147,.2), rgba(56,199,147,.08));
+      border-color: rgba(56,199,147,.35);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(19,35,58,.95), rgba(16,27,45,.95));
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.18);
+    }
+    .card h2 {
+      margin: 0 0 14px;
+      font-size: 15px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .kpi-value {
+      font-size: 30px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+      max-height: 360px;
+      overflow: auto;
+    }
+    .item {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(9,17,31,.32);
+    }
+    .item .head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .item .meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid rgba(32,53,82,.65);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+    }
+    tr:last-child td { border-bottom: none; }
+    .tiny {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    @media (max-width: 1100px) {
+      .span-3, .span-4, .span-6, .span-8 { grid-column: span 12; }
+      .topbar { flex-direction: column; align-items: flex-start; }
+      .status-badges { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="title">
+        <h1>Trading Ops Dashboard</h1>
+        <p>Health, alerts, agents, market workflow, and recent ledger activity.</p>
+      </div>
+      <div class="status-badges">
+        <div class="badge">Refresh <strong id="refresh-rate">10s</strong></div>
+        <div class="badge">Updated <strong id="updated-at">never</strong></div>
+        <div class="badge">Kill Switch <strong id="kill-switch">unknown</strong></div>
+        <button id="kill-switch-action" class="btn btn-danger" type="button">Activate Kill Switch</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="card span-3">
+        <h2>System Health</h2>
+        <div class="kpi-value" id="health-state">Loading...</div>
+        <div class="sub" id="health-sub">Checking service health</div>
+      </section>
+      <section class="card span-3">
+        <h2>Kill Switch</h2>
+        <div class="kpi-value" id="kill-switch-state">Unknown</div>
+        <div class="sub" id="kill-switch-sub">Stops new trade approvals and execution</div>
+      </section>
+      <section class="card span-3">
+        <h2>Uptime</h2>
+        <div class="kpi-value" id="uptime">-</div>
+        <div class="sub">Ops monitor service uptime</div>
+      </section>
+      <section class="card span-3">
+        <h2>Recent Decisions</h2>
+        <div class="kpi-value" id="decision-count">-</div>
+        <div class="sub">Judge decisions observed</div>
+      </section>
+      <section class="card span-3">
+        <h2>Recent Fills</h2>
+        <div class="kpi-value" id="fill-count">-</div>
+        <div class="sub">Execution fills observed</div>
+      </section>
+
+      <section class="card span-3">
+        <h2>Wallet Value</h2>
+        <div class="kpi-value" id="wallet-estimate">-</div>
+        <div class="sub" id="wallet-sub">Approximate Binance wallet value</div>
+      </section>
+      <section class="card span-3">
+        <h2>Cash Balance</h2>
+        <div class="kpi-value" id="quote-balance">-</div>
+        <div class="sub" id="quote-balance-sub">Available quote balance</div>
+      </section>
+      <section class="card span-3">
+        <h2>Open Orders</h2>
+        <div class="kpi-value" id="open-orders">-</div>
+        <div class="sub" id="open-orders-sub">Current Binance open orders</div>
+      </section>
+      <section class="card span-3">
+        <h2>Last Exchange Trade</h2>
+        <div class="kpi-value" id="last-exchange-trade">-</div>
+        <div class="sub" id="last-exchange-trade-sub">Most recent Binance account trade</div>
+      </section>
+
+      <section class="card span-4">
+        <h2>Agents</h2>
+        <div id="agents" class="list"></div>
+      </section>
+      <section class="card span-8">
+        <h2>Alerts</h2>
+        <div id="alerts" class="list"></div>
+      </section>
+
+      <section class="card span-6">
+        <h2>Recent Workflow Events</h2>
+        <div id="events" class="list"></div>
+      </section>
+      <section class="card span-6">
+        <h2>Recent Trades</h2>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Ticker</th>
+                <th>Action</th>
+                <th>Qty</th>
+                <th>Fill</th>
+                <th>Slip</th>
+                <th>Mode</th>
+              </tr>
+            </thead>
+            <tbody id="trades"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card span-6">
+        <h2>Binance Balances</h2>
+        <div class="tiny" id="account-meta">Loading account snapshot...</div>
+        <div style="overflow:auto; margin-top: 10px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Free</th>
+                <th>Locked</th>
+                <th>Total</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="account-balances"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card span-6">
+        <h2>Recent Binance Trades</h2>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Price</th>
+                <th>Qty</th>
+                <th>Quote</th>
+                <th>Commission</th>
+              </tr>
+            </thead>
+            <tbody id="exchange-trades"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card span-12">
+        <h2>Event Totals</h2>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Heartbeats</th>
+                <th>Alerts</th>
+                <th>Fills</th>
+                <th>Decisions</th>
+                <th>Proposals</th>
+                <th>Reviews</th>
+                <th>Universe Updates</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="metric-heartbeats">-</td>
+                <td id="metric-alerts">-</td>
+                <td id="metric-fills">-</td>
+                <td id="metric-decisions">-</td>
+                <td id="metric-proposals">-</td>
+                <td id="metric-reviews">-</td>
+                <td id="metric-universe">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const refreshMs = 10000;
+    const refreshNode = document.getElementById('refresh-rate');
+    const killSwitchButton = document.getElementById('kill-switch-action');
+    refreshNode.textContent = 'live';
+
+    function fmtTime(value) {
+      if (!value) return '-';
+      const date = new Date(value * 1000);
+      return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+    }
+
+    function fmtAgo(value) {
+      if (!value) return 'never';
+      const delta = Math.max(0, Math.floor(Date.now() / 1000 - value));
+      if (delta < 60) return `${delta}s ago`;
+      if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+      return `${Math.floor(delta / 3600)}h ago`;
+    }
+
+    function tagClass(level) {
+      if (level === 'critical' || level === 'error') return 'bad';
+      if (level === 'warning') return 'warn';
+      return 'ok';
+    }
+
+    function fmtNumber(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+      return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: digits,
+      });
+    }
+
+    function renderAgents(agents, staleAgents) {
+      const node = document.getElementById('agents');
+      if (!agents.length) {
+        node.innerHTML = '<div class="item"><div class="meta">No heartbeats received yet.</div></div>';
+        return;
+      }
+      node.innerHTML = agents.map(agent => {
+        const stale = staleAgents.includes(agent.agent);
+        const cls = stale ? 'bad' : 'ok';
+        return `
+          <div class="item">
+            <div class="head">
+              <strong>${agent.agent}</strong>
+              <span class="${cls}">${stale ? 'stale' : 'healthy'}</span>
+            </div>
+            <div class="meta">Last heartbeat ${fmtAgo(agent.timestamp)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderAlerts(alerts) {
+      const node = document.getElementById('alerts');
+      if (!alerts.length) {
+        node.innerHTML = '<div class="item"><div class="meta">No alerts yet.</div></div>';
+        return;
+      }
+      node.innerHTML = alerts.map(alert => `
+        <div class="item">
+          <div class="head">
+            <strong>${alert.agent || 'system'}</strong>
+            <span class="${tagClass(alert.level)}">${alert.level || 'info'}</span>
+          </div>
+          <div>${alert.message || '-'}</div>
+          <div class="meta">${fmtTime(alert.timestamp)}</div>
+          ${alert.details && Object.keys(alert.details).length ? `<div class="code tiny">${JSON.stringify(alert.details)}</div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    function renderEvents(events) {
+      const node = document.getElementById('events');
+      if (!events.length) {
+        node.innerHTML = '<div class="item"><div class="meta">No events captured yet.</div></div>';
+        return;
+      }
+      node.innerHTML = events.map(event => `
+        <div class="item">
+          <div class="head">
+            <strong>${event.channel}</strong>
+            <span class="tiny">${fmtTime(event.timestamp)}</span>
+          </div>
+          <div class="code">${JSON.stringify(event.summary)}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderTrades(trades) {
+      const node = document.getElementById('trades');
+      if (!trades.length) {
+        node.innerHTML = '<tr><td colspan="7" class="tiny">No trades recorded yet.</td></tr>';
+        return;
+      }
+      node.innerHTML = trades.map(trade => `
+        <tr>
+          <td>${trade.timestamp || '-'}</td>
+          <td>${trade.ticker || '-'}</td>
+          <td class="${trade.action === 'BUY' ? 'ok' : 'warn'}">${trade.action || '-'}</td>
+          <td>${trade.quantity || '-'}</td>
+          <td>${trade.fill_price || '-'}</td>
+          <td>${trade.slippage_bps || '-'}</td>
+          <td>${trade.paper_trade ? 'paper' : 'live'}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderAccount(account) {
+      const quoteAsset = account.quote_asset || 'USDT';
+      const balancesNode = document.getElementById('account-balances');
+      const exchangeTradesNode = document.getElementById('exchange-trades');
+      const accountMetaNode = document.getElementById('account-meta');
+
+      if (!account.available) {
+        document.getElementById('wallet-estimate').textContent = '-';
+        document.getElementById('wallet-sub').textContent = account.error || 'Binance account data unavailable';
+        document.getElementById('quote-balance').textContent = '-';
+        document.getElementById('quote-balance-sub').textContent = `Free ${quoteAsset} balance unavailable`;
+        document.getElementById('open-orders').textContent = '-';
+        document.getElementById('open-orders-sub').textContent = 'Open order data unavailable';
+        document.getElementById('last-exchange-trade').textContent = '-';
+        document.getElementById('last-exchange-trade-sub').textContent = account.error || 'No exchange trade data';
+        accountMetaNode.textContent = account.error || 'No Binance account snapshot yet.';
+        balancesNode.innerHTML = '<tr><td colspan="5" class="tiny">No account balance data available.</td></tr>';
+        exchangeTradesNode.innerHTML = '<tr><td colspan="7" class="tiny">No Binance trade data available.</td></tr>';
+        return;
+      }
+
+      document.getElementById('wallet-estimate').textContent = `${fmtNumber(account.wallet_estimate_quote, 2)} ${quoteAsset}`;
+      document.getElementById('wallet-sub').textContent = `${account.environment || 'unknown'} account, approx mark-to-market wallet value`;
+      document.getElementById('quote-balance').textContent = `${fmtNumber(account.quote_balance_free, 2)} ${quoteAsset}`;
+      document.getElementById('quote-balance-sub').textContent = `Locked ${fmtNumber(account.quote_balance_locked, 2)} ${quoteAsset}`;
+      document.getElementById('open-orders').textContent = fmtNumber(account.open_orders, 0);
+      document.getElementById('open-orders-sub').textContent = `Can trade: ${account.can_trade ? 'yes' : 'no'} | Fees ${fmtNumber(account.maker_commission_bps, 2)}/${fmtNumber(account.taker_commission_bps, 2)} bps`;
+
+      const latestExchangeTrade = (account.recent_exchange_trades || [])[0];
+      document.getElementById('last-exchange-trade').textContent = latestExchangeTrade
+        ? `${latestExchangeTrade.side} ${latestExchangeTrade.symbol}`
+        : '-';
+      document.getElementById('last-exchange-trade-sub').textContent = latestExchangeTrade
+        ? `${fmtTime(latestExchangeTrade.time)} at ${fmtNumber(latestExchangeTrade.price, 4)}`
+        : 'No recent Binance trades';
+
+      accountMetaNode.textContent = `Updated ${fmtAgo(account.last_refreshed_at)} | Permissions: ${(account.permissions || []).join(', ') || 'n/a'}`;
+
+      const balances = account.non_zero_assets || [];
+      balancesNode.innerHTML = balances.length
+        ? balances.map(item => `
+          <tr>
+            <td>${item.asset}</td>
+            <td>${fmtNumber(item.free, 6)}</td>
+            <td>${fmtNumber(item.locked, 6)}</td>
+            <td>${fmtNumber(item.total, 6)}</td>
+            <td>${item.value_in_quote !== null ? `${fmtNumber(item.value_in_quote, 2)} ${quoteAsset}` : '<span class="muted">n/a</span>'}</td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="5" class="tiny">No non-zero balances found.</td></tr>';
+
+      const exchangeTrades = account.recent_exchange_trades || [];
+      exchangeTradesNode.innerHTML = exchangeTrades.length
+        ? exchangeTrades.map(trade => `
+          <tr>
+            <td>${trade.time ? fmtTime(trade.time) : '-'}</td>
+            <td>${trade.symbol || '-'}</td>
+            <td class="${trade.side === 'BUY' ? 'ok' : 'warn'}">${trade.side || '-'}</td>
+            <td>${fmtNumber(trade.price, 6)}</td>
+            <td>${fmtNumber(trade.qty, 6)}</td>
+            <td>${fmtNumber(trade.quote_qty, 2)}</td>
+            <td>${trade.commission || '-'}</td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="7" class="tiny">No recent Binance trades found.</td></tr>';
+    }
+
+    function renderSnapshot(data) {
+      document.getElementById('updated-at').textContent = new Date().toLocaleTimeString();
+      document.getElementById('kill-switch').textContent = data.kill_switch_active ? 'ACTIVE' : 'off';
+      document.getElementById('kill-switch').className = data.kill_switch_active ? 'bad' : 'ok';
+      document.getElementById('kill-switch-state').textContent = data.kill_switch_active ? 'ACTIVE' : 'OFF';
+      document.getElementById('kill-switch-state').className = `kpi-value ${data.kill_switch_active ? 'bad' : 'ok'}`;
+      document.getElementById('kill-switch-sub').textContent = data.kill_switch_message || 'Stops new trade approvals and execution';
+      killSwitchButton.textContent = data.kill_switch_active ? 'Release Kill Switch' : 'Activate Kill Switch';
+      killSwitchButton.className = `btn ${data.kill_switch_active ? 'btn-safe' : 'btn-danger'}`;
+      killSwitchButton.dataset.active = data.kill_switch_active ? 'true' : 'false';
+
+      document.getElementById('health-state').textContent = data.healthy ? 'Healthy' : 'Attention';
+      document.getElementById('health-state').className = `kpi-value ${data.healthy ? 'ok' : 'bad'}`;
+      document.getElementById('health-sub').textContent = data.stale_agents.length
+        ? `Stale agents: ${data.stale_agents.join(', ')}`
+        : 'All known agent heartbeats are fresh';
+
+      document.getElementById('uptime').textContent = `${Math.floor((data.uptime_seconds || 0) / 60)}m`;
+      document.getElementById('decision-count').textContent = data.event_counts.decisions;
+      document.getElementById('fill-count').textContent = data.event_counts.fills;
+
+      document.getElementById('metric-heartbeats').textContent = data.event_counts.heartbeats;
+      document.getElementById('metric-alerts').textContent = data.event_counts.alerts;
+      document.getElementById('metric-fills').textContent = data.event_counts.fills;
+      document.getElementById('metric-decisions').textContent = data.event_counts.decisions;
+      document.getElementById('metric-proposals').textContent = data.event_counts.proposals;
+      document.getElementById('metric-reviews').textContent = data.event_counts.reviews;
+      document.getElementById('metric-universe').textContent = data.event_counts.universe_updates;
+
+      renderAgents(data.agents || [], data.stale_agents || []);
+      renderAlerts(data.alerts || []);
+      renderEvents(data.recent_events || []);
+      renderTrades(data.recent_trades || []);
+      renderAccount(data.account_snapshot || {});
+    }
+
+    async function refresh() {
+      const res = await fetch('/api/snapshot', { cache: 'no-store' });
+      const data = await res.json();
+      renderSnapshot(data);
+    }
+
+    async function toggleKillSwitch() {
+      const active = killSwitchButton.dataset.active === 'true';
+      const nextState = !active;
+      const message = nextState
+        ? 'Activate the kill switch? This will stop new trade approvals and execution.'
+        : 'Release the kill switch? This will allow new trade approvals and execution again.';
+      if (!window.confirm(message)) return;
+
+      killSwitchButton.disabled = true;
+      try {
+        const res = await fetch('/api/kill-switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active: nextState }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Kill switch update failed');
+        }
+        renderSnapshot(data);
+      } catch (err) {
+        console.error(err);
+        window.alert(err.message || 'Kill switch update failed');
+      } finally {
+        killSwitchButton.disabled = false;
+      }
+    }
+
+    function startPolling() {
+      refreshNode.textContent = `${refreshMs / 1000}s fallback`;
+      refresh().catch(console.error);
+      setInterval(() => refresh().catch(console.error), refreshMs);
+    }
+
+    if (window.EventSource) {
+      const stream = new EventSource('/api/stream');
+      stream.onopen = () => {
+        refreshNode.textContent = 'live';
+      };
+      stream.onmessage = (event) => {
+        try {
+          renderSnapshot(JSON.parse(event.data));
+        } catch (err) {
+          console.error(err);
+        }
+      };
+      stream.onerror = () => {
+        stream.close();
+        startPolling();
+      };
+    } else {
+      startPolling();
+    }
+
+    killSwitchButton.addEventListener('click', () => {
+      toggleKillSwitch().catch(console.error);
+    });
+  </script>
+</body>
+</html>

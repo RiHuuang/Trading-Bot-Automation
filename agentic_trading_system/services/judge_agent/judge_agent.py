@@ -3,13 +3,12 @@ import json
 import os
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
-from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
-from core.market_context import fetch_timeframe_context, format_timeframe_context
+from core.binance_client import BinanceRESTClient, infer_quote_asset, load_binance_config, load_symbol_map, resolve_venue_symbol
+from core.llm_client import LLMClient
+from core.market_context import fetch_timeframe_context, format_timeframe_context, get_configured_higher_timeframes
 from core.schemas import JudgeDecision, JudgeDecisionDraft, ProposalReview, TradeProposal
 
 load_dotenv()
@@ -18,18 +17,29 @@ load_dotenv()
 class JudgeAgent(BaseAgent):
     def __init__(self):
         super().__init__("JudgeAgent")
-        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model_name = os.getenv("JUDGE_MODEL", "gemini-2.5-flash")
+        self.provider = os.getenv("JUDGE_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "gemini"))
+        self.model_name = os.getenv(
+            "JUDGE_MODEL",
+            "gpt-5.4" if self.provider == "openai" else "gemini-2.5-flash",
+        )
+        self.client = LLMClient(provider=self.provider, model_name=self.model_name)
         self.proposals: dict[str, TradeProposal] = {}
         self.reviews: dict[str, ProposalReview] = {}
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
         self.symbol_map = load_symbol_map()
+        self.quote_asset = infer_quote_asset(self.binance_config.symbol)
+        self.higher_timeframes = get_configured_higher_timeframes()
 
     def get_higher_timeframe_context(self, proposal: TradeProposal) -> str:
-        symbol = self.symbol_map.get(proposal.ticker, self.binance_config.symbol)
+        symbol = resolve_venue_symbol(
+            proposal.ticker,
+            symbol_map=self.symbol_map,
+            fallback_symbol=self.binance_config.symbol,
+            quote_asset=self.quote_asset,
+        )
         contexts = []
-        for interval in ("1h", "4h"):
+        for interval in self.higher_timeframes:
             try:
                 context = fetch_timeframe_context(
                     client=self.binance,
@@ -106,6 +116,12 @@ Market snapshot:
 - EMA(20) / EMA(50): {snapshot.ema_20:.2f} / {snapshot.ema_50:.2f}
 - Bollinger bandwidth: {snapshot.bollinger_bandwidth:.2f}
 - 20-bar volatility: {snapshot.volatility_20:.4%}
+- CCI(20): {snapshot.cci_20:.2f}
+- MFI(14): {snapshot.mfi_14:.2f}
+- Aroon up/down: {snapshot.aroon_up_25:.2f} / {snapshot.aroon_down_25:.2f}
+- OBV slope(5): {snapshot.obv_slope_5:.2f}
+- Taker buy ratio: {snapshot.taker_buy_ratio:.2f}
+- Fibonacci 38.2 / 61.8: {snapshot.fib_382:.2f} / {snapshot.fib_618:.2f}
 
 Higher timeframe context:
 {higher_timeframes}
@@ -119,18 +135,12 @@ Decision policy:
         """
 
         try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=JudgeDecisionDraft,
-                    temperature=0.0,
-                ),
+            decision_data = await asyncio.to_thread(
+                self.client.generate_json,
+                prompt,
+                JudgeDecisionDraft,
+                0.0,
             )
-            draft = JudgeDecisionDraft(**json.loads(response.text))
-            decision_data = draft.model_dump()
             decision_data["decision_id"] = self.new_id("decision")
             decision_data["proposal_id"] = proposal.proposal_id
             decision_data["source_agent"] = self.agent_name
@@ -176,7 +186,7 @@ Decision policy:
 
 async def main():
     agent = JudgeAgent()
-    await agent.run()
+    await asyncio.gather(agent.heartbeat_loop(), agent.run())
 
 
 if __name__ == "__main__":

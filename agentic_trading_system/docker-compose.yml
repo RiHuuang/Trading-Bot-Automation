@@ -4,6 +4,11 @@ services:
     ports:
       - "6379:6379"
       - "8001:8001"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     restart: always
 
   postgres:
@@ -14,6 +19,11 @@ services:
       POSTGRES_DB: trading_ledger
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading_ledger"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     restart: always
 
   ingest_agent:
@@ -69,6 +79,56 @@ services:
       - REDIS_URL=redis://redis:6379
     depends_on:
       - redis
+    restart: always
+
+  ops_monitor:
+    build: .
+    command: python services/ops_monitor/ops_monitor.py
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - OPS_MONITOR_PORT=8080
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=trading_ledger
+      - POSTGRES_USER=trader
+      - POSTGRES_PASSWORD=securepassword
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - postgres
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  postgres_backup:
+    image: postgres:15-alpine
+    env_file:
+      - .env
+    environment:
+      - PGPASSWORD=securepassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=trading_ledger
+      - POSTGRES_USER=trader
+      - BACKUP_INTERVAL_SECONDS=21600
+    volumes:
+      - ./backups/postgres:/backups
+    command: >
+      sh -c '
+        mkdir -p /backups &&
+        while true; do
+          ts=$$(date +%Y%m%d_%H%M%S);
+          pg_dump -h $$POSTGRES_HOST -U $$POSTGRES_USER $$POSTGRES_DB > /backups/trading_ledger_$$ts.sql;
+          find /backups -type f -name "*.sql" -mtime +7 -delete;
+          sleep $$BACKUP_INTERVAL_SECONDS;
+        done
+      '
+    depends_on:
+      - postgres
     restart: always
 
   risk_agent:

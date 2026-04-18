@@ -3,13 +3,12 @@ import json
 import os
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
-from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
-from core.market_context import fetch_timeframe_context, format_timeframe_context
+from core.binance_client import BinanceRESTClient, infer_quote_asset, load_binance_config, load_symbol_map, resolve_venue_symbol
+from core.llm_client import LLMClient
+from core.market_context import fetch_timeframe_context, format_timeframe_context, get_configured_higher_timeframes
 from core.schemas import ProposalReview, ProposalReviewDraft, TradeProposal
 
 load_dotenv()
@@ -18,16 +17,27 @@ load_dotenv()
 class ReviewAgent(BaseAgent):
     def __init__(self):
         super().__init__("ReviewAgent")
-        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model_name = os.getenv("REVIEW_MODEL", "gemini-2.5-flash")
+        self.provider = os.getenv("REVIEW_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "gemini"))
+        self.model_name = os.getenv(
+            "REVIEW_MODEL",
+            "gpt-5.4-mini" if self.provider == "openai" else "gemini-2.5-flash",
+        )
+        self.client = LLMClient(provider=self.provider, model_name=self.model_name)
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
         self.symbol_map = load_symbol_map()
+        self.quote_asset = infer_quote_asset(self.binance_config.symbol)
+        self.higher_timeframes = get_configured_higher_timeframes()
 
     def get_higher_timeframe_context(self, proposal: TradeProposal) -> str:
-        symbol = self.symbol_map.get(proposal.ticker, self.binance_config.symbol)
+        symbol = resolve_venue_symbol(
+            proposal.ticker,
+            symbol_map=self.symbol_map,
+            fallback_symbol=self.binance_config.symbol,
+            quote_asset=self.quote_asset,
+        )
         contexts = []
-        for interval in ("1h", "4h"):
+        for interval in self.higher_timeframes:
             try:
                 context = fetch_timeframe_context(
                     client=self.binance,
@@ -74,6 +84,16 @@ Market snapshot:
 - 5-bar return: {snapshot.returns_5:.4%}
 - 20-bar return: {snapshot.returns_20:.4%}
 - 20-bar volatility: {snapshot.volatility_20:.4%}
+- ROC(12): {snapshot.roc_12:.2f}
+- CCI(20): {snapshot.cci_20:.2f}
+- Williams %R(14): {snapshot.williams_r_14:.2f}
+- MFI(14): {snapshot.mfi_14:.2f}
+- Aroon up/down: {snapshot.aroon_up_25:.2f} / {snapshot.aroon_down_25:.2f}
+- OBV slope(5): {snapshot.obv_slope_5:.2f}
+- Taker buy ratio: {snapshot.taker_buy_ratio:.2f}
+- VWAP(14): {snapshot.vwap_14:.2f}
+- Ichimoku A/B: {snapshot.ichimoku_a:.2f} / {snapshot.ichimoku_b:.2f}
+- Fibonacci 38.2 / 61.8: {snapshot.fib_382:.2f} / {snapshot.fib_618:.2f}
 
 Higher timeframe context:
 {higher_timeframes}
@@ -88,18 +108,12 @@ Review policy:
         """
 
         try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=ProposalReviewDraft,
-                    temperature=0.1,
-                ),
+            review_data = await asyncio.to_thread(
+                self.client.generate_json,
+                prompt,
+                ProposalReviewDraft,
+                0.1,
             )
-            draft = ProposalReviewDraft(**json.loads(response.text))
-            review_data = draft.model_dump()
             review_data["review_id"] = self.new_id("review")
             review_data["proposal_id"] = proposal.proposal_id
             review_data["reviewer_agent"] = self.agent_name
@@ -115,7 +129,7 @@ Review policy:
 
 async def main():
     agent = ReviewAgent()
-    await agent.listen("SIGNAL_PROPOSAL_EVENT", agent.review_proposal)
+    await asyncio.gather(agent.heartbeat_loop(), agent.listen("SIGNAL_PROPOSAL_EVENT", agent.review_proposal))
 
 
 if __name__ == "__main__":

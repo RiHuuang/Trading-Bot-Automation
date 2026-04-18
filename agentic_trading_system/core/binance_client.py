@@ -67,14 +67,45 @@ def load_symbol_map() -> dict[str, str]:
     configured = os.getenv("BINANCE_SYMBOLS", os.getenv("BINANCE_SYMBOL", "BTCUSDT"))
     mapping: dict[str, str] = {}
     for raw_symbol in [item.strip().upper() for item in configured.split(",") if item.strip()]:
-        if raw_symbol.endswith("USDT"):
-            base_asset = raw_symbol[: -4]
-        elif raw_symbol.endswith("IDR"):
-            base_asset = raw_symbol[: -3]
-        else:
-            base_asset = raw_symbol
+        base_asset, _ = split_base_quote(raw_symbol)
         mapping[base_asset] = raw_symbol
     return mapping
+
+
+def split_base_quote(symbol: str) -> tuple[str, str]:
+    raw_symbol = symbol.upper()
+    for quote_asset in ("USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BTC", "ETH", "BNB", "TRY", "EUR", "BRL", "IDR"):
+        if raw_symbol.endswith(quote_asset):
+            return raw_symbol[: -len(quote_asset)], quote_asset
+    return raw_symbol, ""
+
+
+def infer_quote_asset(configured_symbol: str | None = None) -> str:
+    env_quote_asset = os.getenv("SCOUT_QUOTE_ASSET", "").strip().upper()
+    if env_quote_asset:
+        return env_quote_asset
+    if configured_symbol:
+        _, quote_asset = split_base_quote(configured_symbol)
+        if quote_asset:
+            return quote_asset
+    default_symbol = os.getenv("BINANCE_SYMBOL", "BTCUSDT")
+    _, quote_asset = split_base_quote(default_symbol)
+    return quote_asset or "USDT"
+
+
+def resolve_venue_symbol(
+    ticker: str,
+    symbol_map: dict[str, str] | None = None,
+    fallback_symbol: str | None = None,
+    quote_asset: str | None = None,
+) -> str:
+    normalized_ticker = ticker.upper()
+    if symbol_map and normalized_ticker in symbol_map:
+        return symbol_map[normalized_ticker]
+    quote = (quote_asset or infer_quote_asset(fallback_symbol)).upper()
+    if normalized_ticker.endswith(quote):
+        return normalized_ticker
+    return f"{normalized_ticker}{quote}"
 
 
 class BinanceRESTClient:
@@ -94,6 +125,18 @@ class BinanceRESTClient:
             hashlib.sha256,
         ).hexdigest()
         return f"{payload}&signature={signature}"
+
+    def _signed_get(self, path: str, params: dict | None = None, timeout: int = 15) -> dict | list:
+        signed_params = dict(params or {})
+        signed_params.setdefault("recvWindow", 5000)
+        signed_params.setdefault("timestamp", int(time.time() * 1000))
+        signed_query = self._sign_params(signed_params)
+        response = self.session.get(
+            f"{self.config.rest_base}{path}?{signed_query}",
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
 
     def get_klines(
         self,
@@ -177,6 +220,23 @@ class BinanceRESTClient:
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, list) else [payload]
+
+    def get_account(self) -> dict:
+        payload = self._signed_get("/api/v3/account", timeout=20)
+        return payload if isinstance(payload, dict) else {}
+
+    def get_my_trades(self, symbol: str, limit: int = 10) -> list[dict]:
+        payload = self._signed_get(
+            "/api/v3/myTrades",
+            params={"symbol": symbol, "limit": limit},
+            timeout=20,
+        )
+        return payload if isinstance(payload, list) else []
+
+    def get_open_orders(self, symbol: str | None = None) -> list[dict]:
+        params = {"symbol": symbol} if symbol else {}
+        payload = self._signed_get("/api/v3/openOrders", params=params, timeout=20)
+        return payload if isinstance(payload, list) else []
 
     def place_market_order(
         self,

@@ -21,6 +21,10 @@ class MarketTick(BaseModel):
     low: float = Field(..., gt=0.0)
     close: float = Field(..., gt=0.0)
     volume: float = Field(..., ge=0.0)
+    quote_volume: float = Field(default=0.0, ge=0.0)
+    trade_count: int = Field(default=0, ge=0)
+    taker_buy_base_volume: float = Field(default=0.0, ge=0.0)
+    taker_buy_quote_volume: float = Field(default=0.0, ge=0.0)
     event_timestamp: float = Field(..., gt=0.0)
     candle_close_timestamp: float = Field(..., gt=0.0)
     is_closed: bool = True
@@ -49,8 +53,31 @@ class MarketSnapshot(BaseModel):
     bollinger_bandwidth: float = Field(..., ge=0.0)
     returns_5: float
     returns_20: float
+    roc_12: float
     volatility_20: float = Field(..., ge=0.0)
+    sma_20: float = Field(..., gt=0.0)
+    sma_50: float = Field(..., gt=0.0)
+    cci_20: float
+    williams_r_14: float
+    mfi_14: float = Field(..., ge=0.0, le=100.0)
+    obv: float
+    obv_slope_5: float
+    vwap_14: float = Field(..., gt=0.0)
+    aroon_up_25: float = Field(..., ge=0.0, le=100.0)
+    aroon_down_25: float = Field(..., ge=0.0, le=100.0)
+    ichimoku_conversion: float = Field(..., gt=0.0)
+    ichimoku_base: float = Field(..., gt=0.0)
+    ichimoku_a: float = Field(..., gt=0.0)
+    ichimoku_b: float = Field(..., gt=0.0)
+    fib_236: float = Field(..., gt=0.0)
+    fib_382: float = Field(..., gt=0.0)
+    fib_500: float = Field(..., gt=0.0)
+    fib_618: float = Field(..., gt=0.0)
     volume: float = Field(..., ge=0.0)
+    quote_volume: float = Field(..., ge=0.0)
+    trade_count: int = Field(..., ge=0)
+    taker_buy_ratio: float = Field(..., ge=0.0)
+    volume_zscore_20: float
 
 
 class TradeProposal(BaseModel):

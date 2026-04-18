@@ -5,6 +5,7 @@ import psycopg2
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
+from core.db import ensure_trades_table
 from core.schemas import OrderFill
 
 
@@ -20,28 +21,7 @@ class LedgerAgent(BaseAgent):
         self._init_db()
 
     def _init_db(self):
-        with self.db_conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS trades (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(64) UNIQUE,
-                    proposal_id VARCHAR(64),
-                    decision_id VARCHAR(64),
-                    ticker VARCHAR(10),
-                    action VARCHAR(10),
-                    quantity NUMERIC,
-                    quoted_price NUMERIC,
-                    fill_price NUMERIC,
-                    slippage_bps NUMERIC,
-                    status VARCHAR(20),
-                    paper_trade BOOLEAN DEFAULT TRUE,
-                    reasoning TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            self.db_conn.commit()
+        ensure_trades_table(self.db_conn)
         print("[LedgerAgent] Database connection verified.")
 
     async def record_trade(self, data):
@@ -96,7 +76,7 @@ class LedgerAgent(BaseAgent):
 
 async def main():
     agent = LedgerAgent()
-    await agent.listen("ORDER_FILL_EVENT", agent.record_trade)
+    await asyncio.gather(agent.heartbeat_loop(), agent.listen("ORDER_FILL_EVENT", agent.record_trade))
 
 
 if __name__ == "__main__":

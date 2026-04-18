@@ -6,7 +6,8 @@ import psycopg2
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
-from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
+from core.binance_client import BinanceRESTClient, SymbolInfo, infer_quote_asset, load_binance_config, load_symbol_map, resolve_venue_symbol
+from core.db import ensure_trades_table
 from core.schemas import ExecutionOrder, JudgeDecision
 
 
@@ -17,6 +18,7 @@ class RiskAgent(BaseAgent):
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
         self.symbol_map = load_symbol_map()
+        self.quote_asset = infer_quote_asset(self.binance_config.symbol)
         self.symbol_info_map = {
             base_asset: self.binance.get_symbol_info(venue_symbol)
             for base_asset, venue_symbol in self.symbol_map.items()
@@ -43,28 +45,7 @@ class RiskAgent(BaseAgent):
         self._init_db()
 
     def _init_db(self):
-        with self.db_conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS trades (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(64) UNIQUE,
-                    proposal_id VARCHAR(64),
-                    decision_id VARCHAR(64),
-                    ticker VARCHAR(10),
-                    action VARCHAR(10),
-                    quantity NUMERIC,
-                    quoted_price NUMERIC,
-                    fill_price NUMERIC,
-                    slippage_bps NUMERIC,
-                    status VARCHAR(20),
-                    paper_trade BOOLEAN DEFAULT TRUE,
-                    reasoning TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            self.db_conn.commit()
+        ensure_trades_table(self.db_conn)
 
     def get_today_trade_count(self) -> int:
         try:
@@ -133,7 +114,31 @@ class RiskAgent(BaseAgent):
             self.db_conn.rollback()
             return 0.0
 
+    def get_venue_symbol(self, ticker: str) -> str:
+        return resolve_venue_symbol(
+            ticker,
+            symbol_map=self.symbol_map,
+            fallback_symbol=self.binance_config.symbol,
+            quote_asset=self.quote_asset,
+        )
+
+    def get_symbol_info(self, ticker: str) -> SymbolInfo | None:
+        if ticker in self.symbol_info_map:
+            return self.symbol_info_map[ticker]
+        try:
+            info = self.binance.get_symbol_info(self.get_venue_symbol(ticker))
+        except Exception as exc:
+            print(f"[RiskAgent] Failed loading symbol info for {ticker}: {exc}")
+            return None
+        self.symbol_info_map[ticker] = info
+        return info
+
     async def evaluate_decision(self, data):
+        if await self.is_kill_switch_active():
+            await self.publish_alert("critical", "Kill switch active; risk approvals blocked", {"event": "JUDGE_DECISION_EVENT"})
+            print("[RiskAgent] Kill switch active. Blocking risk approvals.")
+            return
+
         try:
             decision = JudgeDecision(**data)
         except ValidationError as exc:
@@ -158,11 +163,13 @@ class RiskAgent(BaseAgent):
         today_trade_count = self.get_today_trade_count()
         if today_trade_count >= self.max_daily_trades:
             print("[RiskAgent] Rejected: max daily trades reached.")
+            await self.publish_alert("warning", "Max daily trades reached", {"count": today_trade_count})
             return
 
         today_realized_pnl = self.get_today_realized_pnl()
         if today_realized_pnl <= -(self.portfolio_balance_quote * self.max_daily_loss_pct):
             print("[RiskAgent] Rejected: max daily loss reached.")
+            await self.publish_alert("critical", "Max daily loss reached", {"realized_pnl": today_realized_pnl})
             return
 
         if self.utc_timestamp() - self.last_trade_at[decision.proposal.ticker] < self.symbol_cooldown_seconds:
@@ -170,8 +177,8 @@ class RiskAgent(BaseAgent):
             return
 
         snapshot = decision.proposal.market_snapshot
-        venue_symbol = self.symbol_map.get(decision.proposal.ticker, self.binance_config.symbol)
-        symbol_info = self.symbol_info_map.get(decision.proposal.ticker)
+        venue_symbol = self.get_venue_symbol(decision.proposal.ticker)
+        symbol_info = self.get_symbol_info(decision.proposal.ticker)
         if snapshot.atr_14 / snapshot.close < self.min_atr_fraction:
             print("[RiskAgent] Rejected: ATR too low, move likely not worth trading.")
             return
@@ -184,10 +191,12 @@ class RiskAgent(BaseAgent):
 
         if depth.spread_bps > self.max_spread_bps:
             print("[RiskAgent] Rejected: live spread too wide.")
+            await self.publish_alert("warning", "Live spread too wide", {"spread_bps": depth.spread_bps, "ticker": decision.proposal.ticker})
             return
 
         if min(depth.bid_notional_top_n, depth.ask_notional_top_n) < self.min_depth_notional:
             print("[RiskAgent] Rejected: live order book too thin.")
+            await self.publish_alert("warning", "Live order book too thin", {"ticker": decision.proposal.ticker})
             return
 
         inventory = self.get_inventory(decision.proposal.ticker)
@@ -250,7 +259,7 @@ class RiskAgent(BaseAgent):
 
 async def main():
     agent = RiskAgent()
-    await agent.listen("JUDGE_DECISION_EVENT", agent.evaluate_decision)
+    await asyncio.gather(agent.heartbeat_loop(), agent.listen("JUDGE_DECISION_EVENT", agent.evaluate_decision))
 
 
 if __name__ == "__main__":

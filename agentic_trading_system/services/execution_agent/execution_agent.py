@@ -5,7 +5,7 @@ import random
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
-from core.binance_client import BinanceRESTClient, load_binance_config, load_symbol_map
+from core.binance_client import BinanceRESTClient, infer_quote_asset, load_binance_config, load_symbol_map, resolve_venue_symbol
 from core.schemas import ExecutionOrder, OrderFill
 
 
@@ -16,9 +16,15 @@ class ExecutionAgent(BaseAgent):
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
         self.symbol_map = load_symbol_map()
+        self.quote_asset = infer_quote_asset(self.binance_config.symbol)
         self.validate_only = os.getenv("BINANCE_VALIDATE_ONLY", "true").lower() == "true"
 
     async def execute_order(self, data):
+        if await self.is_kill_switch_active():
+            await self.publish_alert("critical", "Kill switch active; execution blocked", {"event": "APPROVED_TRADE_EVENT"})
+            print("[ExecutionAgent] Kill switch active. Blocking execution.")
+            return
+
         try:
             order = ExecutionOrder(**data)
         except ValidationError as exc:
@@ -40,7 +46,12 @@ class ExecutionAgent(BaseAgent):
             try:
                 broker_response = await asyncio.to_thread(
                     self.binance.place_market_order,
-                    symbol=self.symbol_map.get(order.ticker, self.binance_config.symbol),
+                    symbol=resolve_venue_symbol(
+                        order.ticker,
+                        symbol_map=self.symbol_map,
+                        fallback_symbol=self.binance_config.symbol,
+                        quote_asset=self.quote_asset,
+                    ),
                     side=order.action,
                     quantity=order.quantity,
                     client_order_id=order.order_id,
@@ -48,6 +59,7 @@ class ExecutionAgent(BaseAgent):
                 )
             except Exception as exc:
                 print(f"[ExecutionAgent] Binance order request failed: {exc}")
+                await self.publish_alert("critical", "Binance order request failed", {"error": str(exc), "ticker": order.ticker})
                 return
 
         await asyncio.sleep(random.uniform(0.05, 0.2))
@@ -85,7 +97,7 @@ class ExecutionAgent(BaseAgent):
 
 async def main():
     agent = ExecutionAgent()
-    await agent.listen("APPROVED_TRADE_EVENT", agent.execute_order)
+    await asyncio.gather(agent.heartbeat_loop(), agent.listen("APPROVED_TRADE_EVENT", agent.execute_order))
 
 
 if __name__ == "__main__":
