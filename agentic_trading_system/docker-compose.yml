@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    restart: always
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: securepassword
+      POSTGRES_DB: trading_ledger
+    ports:
+      - "5432:5432"
+    restart: always
+
+  ingest_agent:
+    build: .
+    command: python services/market_data_ingest/ingest.py
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always
+
+  signal_agent:
+    build: .
+    command: python services/signal_agent/signal_agent.py
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always
+
+  risk_agent:
+    build: .
+    command: python services/risk_agent/risk_agent.py
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always
+
+  execution_agent:
+    build: .
+    command: python services/execution_agent/execution_agent.py
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always
+    
+  ledger_agent:
+    build: .
+    command: python services/ledger_agent/ledger_agent.py
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=trading_ledger
+      - POSTGRES_USER=trader
+      - POSTGRES_PASSWORD=securepassword
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
