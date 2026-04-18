@@ -5,12 +5,22 @@ import time
 import websockets
 
 from core.base_agent import BaseAgent
+from core.binance_client import load_binance_config
 from core.schemas import MarketTick
 
 
 async def binance_stream():
     agent = BaseAgent("IngestAgent")
-    uri = "wss://stream.binance.com:9443/ws/btcusdt@kline_1m"
+    config = load_binance_config()
+    symbol_info = None
+    try:
+        from core.binance_client import BinanceRESTClient
+
+        symbol_info = BinanceRESTClient(config).get_symbol_info(config.symbol)
+    except Exception as exc:
+        print(f"[IngestAgent] Could not load symbol metadata: {exc}")
+    stream_name = f"{config.symbol.lower()}@kline_{config.interval}"
+    uri = f"{config.market_ws_base}/{stream_name}"
 
     print(f"[IngestAgent] Connecting to Binance WebSocket: {uri}")
 
@@ -21,9 +31,9 @@ async def binance_stream():
             candle = payload["k"]
 
             tick = MarketTick(
-                ticker="BTC",
+                ticker=symbol_info.base_asset if symbol_info else config.symbol,
                 interval=candle["i"],
-                source="binance",
+                source=f"binance_{config.env}",
                 open=float(candle["o"]),
                 high=float(candle["h"]),
                 low=float(candle["l"]),

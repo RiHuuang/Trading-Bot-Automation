@@ -19,6 +19,8 @@ services:
   ingest_agent:
     build: .
     command: python services/market_data_ingest/ingest.py
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -77,6 +79,8 @@ services:
   execution_agent:
     build: .
     command: python services/execution_agent/execution_agent.py
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379
     depends_on:

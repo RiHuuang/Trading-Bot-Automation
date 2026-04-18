@@ -5,6 +5,7 @@ import psycopg2
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
+from core.binance_client import BinanceRESTClient, load_binance_config
 from core.schemas import ExecutionOrder, JudgeDecision
 
 
@@ -12,9 +13,12 @@ class RiskAgent(BaseAgent):
     def __init__(self):
         super().__init__("RiskAgent")
         self.paper_trade = os.getenv("PAPER_TRADING", "true").lower() == "true"
-        self.portfolio_balance_usd = float(os.getenv("PAPER_USD_BALANCE", "10000"))
+        self.binance_config = load_binance_config()
+        self.binance = BinanceRESTClient(self.binance_config)
+        self.symbol_info = self.binance.get_symbol_info(self.binance_config.symbol)
+        self.portfolio_balance_quote = float(os.getenv("PAPER_QUOTE_BALANCE", os.getenv("PAPER_USD_BALANCE", "10000")))
         self.max_risk_per_trade_pct = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.01"))
-        self.max_position_notional_usd = float(os.getenv("MAX_POSITION_NOTIONAL_USD", "2000"))
+        self.max_position_notional_quote = float(os.getenv("MAX_POSITION_NOTIONAL", os.getenv("MAX_POSITION_NOTIONAL_USD", "2000")))
         self.min_confidence_threshold = float(os.getenv("MIN_CONFIDENCE_THRESHOLD", "0.70"))
         self.max_signal_age_seconds = int(os.getenv("MAX_SIGNAL_AGE_SECONDS", "180"))
         self.min_atr_fraction = float(os.getenv("MIN_ATR_FRACTION", "0.002"))
@@ -107,13 +111,24 @@ class RiskAgent(BaseAgent):
 
         inventory = self.get_inventory(decision.proposal.ticker)
         stop_distance = max(snapshot.atr_14 * 2.0, snapshot.close * 0.003)
-        risk_budget = self.portfolio_balance_usd * self.max_risk_per_trade_pct
+        risk_budget = self.portfolio_balance_quote * self.max_risk_per_trade_pct
         size_from_risk = risk_budget / stop_distance
-        size_from_notional = self.max_position_notional_usd / snapshot.close
-        quantity = round(min(size_from_risk, size_from_notional), 6)
+        size_from_notional = self.max_position_notional_quote / snapshot.close
+        quantity = min(size_from_risk, size_from_notional)
+        if self.symbol_info.step_size and self.symbol_info.step_size > 0:
+            quantity = max(
+                round((quantity // self.symbol_info.step_size) * self.symbol_info.step_size, 8),
+                0.0,
+            )
+        else:
+            quantity = round(quantity, 6)
 
         if quantity <= 0:
             print("[RiskAgent] Rejected: quantity computed as zero.")
+            return
+
+        if self.symbol_info.min_notional and (quantity * snapshot.close) < self.symbol_info.min_notional:
+            print("[RiskAgent] Rejected: quantity is below Binance min notional.")
             return
 
         if decision.approved_action == "BUY" and inventory > 0.000001:

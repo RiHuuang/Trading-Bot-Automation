@@ -4,13 +4,13 @@ import os
 from collections import deque
 
 import pandas as pd
-import ta
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pydantic import ValidationError
 
 from core.base_agent import BaseAgent
+from core.indicator_engine import build_market_snapshot, evaluate_models, evaluate_snapshot
 from core.schemas import MarketSnapshot, MarketTick, TradeProposal, TradeProposalDraft
 
 load_dotenv()
@@ -22,7 +22,7 @@ class SignalAgent(BaseAgent):
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_name = os.getenv("SIGNAL_MODEL", "gemini-2.5-flash")
         self.candle_buffer: deque[dict] = deque(maxlen=250)
-        self.minimum_bars = 60
+        self.minimum_bars = int(os.getenv("SIGNAL_MIN_BARS", "120"))
 
     async def process_tick(self, data):
         try:
@@ -46,70 +46,17 @@ class SignalAgent(BaseAgent):
     def build_snapshot(self) -> MarketSnapshot | None:
         df = pd.DataFrame(self.candle_buffer)
         try:
-            close = df["close"]
-            high = df["high"]
-            low = df["low"]
-            volume = df["volume"]
-
-            df["rsi_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
-            macd = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
-            df["macd"] = macd.macd()
-            df["macd_signal"] = macd.macd_signal()
-            df["macd_histogram"] = macd.macd_diff()
-            bollinger = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
-            df["bb_upper"] = bollinger.bollinger_hband()
-            df["bb_lower"] = bollinger.bollinger_lband()
-            df["bb_mid"] = bollinger.bollinger_mavg()
-            df["bb_width"] = bollinger.bollinger_wband()
-            df["atr_14"] = ta.volatility.AverageTrueRange(
-                high=high, low=low, close=close, window=14
-            ).average_true_range()
-            df["adx_14"] = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14).adx()
-            stoch = ta.momentum.StochasticOscillator(
-                high=high, low=low, close=close, window=14, smooth_window=3
-            )
-            df["stoch_k"] = stoch.stoch()
-            df["stoch_d"] = stoch.stoch_signal()
-            df["ema_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
-            df["ema_50"] = ta.trend.EMAIndicator(close=close, window=50).ema_indicator()
-            df["returns_5"] = close.pct_change(periods=5)
-            df["returns_20"] = close.pct_change(periods=20)
-            df["volatility_20"] = close.pct_change().rolling(window=20).std()
-
-            latest = df.iloc[-1]
-            if latest.isna().any():
+            snapshot = build_market_snapshot(df)
+            if snapshot is None:
                 print("[SignalAgent] Indicator set still warming up.")
-                return None
-
-            return MarketSnapshot(
-                ticker=df.iloc[-1]["ticker"],
-                interval=df.iloc[-1]["interval"],
-                generated_at=float(df.iloc[-1]["candle_close_timestamp"]),
-                close=float(latest["close"]),
-                atr_14=float(latest["atr_14"]),
-                adx_14=float(latest["adx_14"]),
-                rsi_14=float(latest["rsi_14"]),
-                stoch_k=float(latest["stoch_k"]),
-                stoch_d=float(latest["stoch_d"]),
-                macd=float(latest["macd"]),
-                macd_signal=float(latest["macd_signal"]),
-                macd_histogram=float(latest["macd_histogram"]),
-                ema_20=float(latest["ema_20"]),
-                ema_50=float(latest["ema_50"]),
-                bollinger_upper=float(latest["bb_upper"]),
-                bollinger_lower=float(latest["bb_lower"]),
-                bollinger_mid=float(latest["bb_mid"]),
-                bollinger_bandwidth=float(latest["bb_width"]),
-                returns_5=float(latest["returns_5"]),
-                returns_20=float(latest["returns_20"]),
-                volatility_20=float(latest["volatility_20"]),
-                volume=float(latest["volume"]),
-            )
+            return snapshot
         except Exception as exc:
             print(f"[SignalAgent] Failed to build market snapshot: {exc}")
             return None
 
     async def analyze_market(self, snapshot: MarketSnapshot):
+        model_decisions = evaluate_models(snapshot)
+        baseline = evaluate_snapshot(snapshot)
         prompt = f"""
 You are the author agent for a BTC systematic trading desk.
 
@@ -131,11 +78,19 @@ Indicator snapshot:
 - 20-bar realized volatility: {snapshot.volatility_20:.4%}
 - Last candle volume: {snapshot.volume:.4f}
 
+Deterministic baseline:
+- Suggested action: {baseline.action}
+- Baseline confidence: {baseline.confidence:.2f}
+- Summary: {baseline.summary}
+- Reasons: {", ".join(baseline.reasons)}
+- Sub-model opinions: {" | ".join(f"{item.model_name}:{item.action}:{item.confidence:.2f}" for item in model_decisions)}
+
 Decision policy:
 - Trend strength is stronger when ADX > 20.
 - Uptrend bias exists when EMA20 > EMA50 and MACD histogram is positive.
 - Downtrend bias exists when EMA20 < EMA50 and MACD histogram is negative.
 - Mean reversion conditions are stronger near Bollinger extremes with RSI/Stochastic confirmation.
+- If you disagree with the deterministic baseline, explain exactly why.
 - If indicators conflict or confidence is below 0.60, output HOLD.
 - Confidence must be calibrated between 0 and 1.
 - Thesis and invalidation must be concise and concrete.

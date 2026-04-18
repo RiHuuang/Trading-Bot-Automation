@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the core logic and all services into the container
 COPY core/ ./core/
 COPY services/ ./services/
+COPY backtests/ ./backtests/
 
 # Python path configuration
 ENV PYTHONPATH=/app

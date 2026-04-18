@@ -54,7 +54,7 @@ class MarketSnapshot(BaseModel):
 
 
 class TradeProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     proposal_id: str
     source_agent: str
@@ -70,7 +70,7 @@ class TradeProposal(BaseModel):
 
 
 class TradeProposalDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     action: TradeAction
     confidence: float = Field(..., ge=0.0, le=1.0)
@@ -80,7 +80,7 @@ class TradeProposalDraft(BaseModel):
 
 
 class ProposalReview(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     review_id: str
     proposal_id: str
@@ -96,7 +96,7 @@ class ProposalReview(BaseModel):
 
 
 class ProposalReviewDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     verdict: ReviewVerdict
     confidence: float = Field(..., ge=0.0, le=1.0)
@@ -107,7 +107,7 @@ class ProposalReviewDraft(BaseModel):
 
 
 class JudgeDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     decision_id: str
     proposal_id: str
@@ -124,7 +124,7 @@ class JudgeDecision(BaseModel):
 
 
 class JudgeDecisionDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     verdict: DecisionVerdict
     approved_action: Literal["BUY", "SELL"] | None = None
