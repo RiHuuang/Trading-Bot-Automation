@@ -1,45 +1,51 @@
 import asyncio
 import json
 import time
+
 import websockets
+
 from core.base_agent import BaseAgent
+from core.schemas import MarketTick
+
 
 async def binance_stream():
     agent = BaseAgent("IngestAgent")
-    # We connect to the 1-second ticker stream for BTC/USDT
-    uri = "wss://stream.binance.com:9443/ws/btcusdt@ticker"
+    uri = "wss://stream.binance.com:9443/ws/btcusdt@kline_1m"
 
-    print(f"[IngestAgent] Connecting to live Binance WebSocket: {uri}")
+    print(f"[IngestAgent] Connecting to Binance WebSocket: {uri}")
 
-    async with websockets.connect(uri) as websocket:
-        print("[IngestAgent] Connected to LIVE market data.")
+    async with websockets.connect(uri, ping_interval=20, ping_timeout=20) as websocket:
+        print("[IngestAgent] Connected to live OHLCV market data.")
         while True:
-            # 1. Wait for Binance to push live data
-            message = await websocket.recv()
-            data = json.loads(message)
+            payload = json.loads(await websocket.recv())
+            candle = payload["k"]
 
-            # 2. Extract the 'c' (current close price) from the Binance payload
-            live_price = round(float(data['c']), 2)
+            tick = MarketTick(
+                ticker="BTC",
+                interval=candle["i"],
+                source="binance",
+                open=float(candle["o"]),
+                high=float(candle["h"]),
+                low=float(candle["l"]),
+                close=float(candle["c"]),
+                volume=float(candle["v"]),
+                event_timestamp=time.time(),
+                candle_close_timestamp=float(candle["T"]) / 1000.0,
+                is_closed=bool(candle["x"]),
+            )
 
-            raw_data = {
-                "ticker": "BTC",
-                "price": live_price,
-                "timestamp": time.time()
-            }
+            if tick.is_closed:
+                await agent.publish_event("TICK_EVENT", tick.model_dump())
 
-            # 3. Publish to your internal message broker
-            await agent.publish_event("TICK_EVENT", raw_data)
-            
-            # Binance updates this stream every 1000ms, so we don't need a manual sleep here.
-            # The speed of the loop is governed by the speed of the global market.
 
 async def main():
     while True:
         try:
             await binance_stream()
-        except Exception as e:
-            print(f"[IngestAgent] WebSocket Disconnected: {e}. Reconnecting in 5s...")
+        except Exception as exc:
+            print(f"[IngestAgent] WebSocket disconnected: {exc}. Reconnecting in 5s...")
             await asyncio.sleep(5)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

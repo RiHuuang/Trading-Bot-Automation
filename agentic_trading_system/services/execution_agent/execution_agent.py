@@ -1,50 +1,64 @@
 import asyncio
 import random
+
+from pydantic import ValidationError
+
 from core.base_agent import BaseAgent
-from core.schemas import ExecutionOrder
+from core.schemas import ExecutionOrder, OrderFill
+
 
 class ExecutionAgent(BaseAgent):
     def __init__(self):
         super().__init__("ExecutionAgent")
+        self.processed_orders: set[str] = set()
 
     async def execute_order(self, data):
-        print(f"\n[ExecutionAgent] RECEIVED APPROVED ORDER: {data['action']} {data['quantity']} {data['ticker']}")
-        
         try:
-            # 1. Validate the order strictly against the schema
             order = ExecutionOrder(**data)
-            
-            # 2. Simulate Exchange Latency (50ms - 200ms is standard)
-            print("[ExecutionAgent] Routing to Exchange API...")
-            await asyncio.sleep(random.uniform(0.05, 0.2))
-            
-            # 3. Simulate Slippage 
-            # You NEVER get the exact price you saw on the screen. The market moves.
-            # We simulate a random price slip between -0.1% and +0.1%
-            quoted_price = 65000.00 # Hardcoded for this simulation
-            slippage_multiplier = random.uniform(0.999, 1.001)
-            actual_fill_price = quoted_price * slippage_multiplier
-            
-            # 4. Confirm the Fill
-            print(f"[ExecutionAgent] ORDER FILLED: {order.action} {order.quantity} {order.ticker} @ ${actual_fill_price:.2f}")
-            
-            # 5. Broadcast the Receipt to the Ledger
-            receipt = {
-                "ticker": order.ticker,
-                "action": order.action,
-                "quantity": order.quantity,
-                "quoted_price": quoted_price,
-                "fill_price": round(actual_fill_price, 2),
-                "status": "FILLED"
-            }
-            await self.publish_event("ORDER_FILL_EVENT", receipt)
+        except ValidationError as exc:
+            print(f"[ExecutionAgent] Invalid order payload: {exc}")
+            return
 
-        except Exception as e:
-            print(f"[ExecutionAgent] FATAL - Order Execution Failed: {e}")
+        if order.order_id in self.processed_orders:
+            print(f"[ExecutionAgent] Skipping duplicate order {order.order_id}.")
+            return
+
+        self.processed_orders.add(order.order_id)
+        print(
+            f"[ExecutionAgent] Executing {order.action} {order.quantity} {order.ticker} "
+            f"(paper={order.paper_trade})."
+        )
+
+        await asyncio.sleep(random.uniform(0.05, 0.2))
+
+        slippage_bps = random.uniform(-4.0, 8.0)
+        actual_fill_price = order.quoted_price * (1 + (slippage_bps / 10000.0))
+        receipt = OrderFill(
+            order_id=order.order_id,
+            proposal_id=order.proposal_id,
+            decision_id=order.decision_id,
+            ticker=order.ticker,
+            action=order.action,
+            quantity=order.quantity,
+            quoted_price=order.quoted_price,
+            fill_price=round(actual_fill_price, 2),
+            slippage_bps=round(slippage_bps, 2),
+            status="FILLED",
+            paper_trade=order.paper_trade,
+            timestamp=self.utc_timestamp(),
+            reasoning=order.reasoning,
+        )
+        print(
+            f"[ExecutionAgent] Order filled at {receipt.fill_price:.2f} "
+            f"with {receipt.slippage_bps:.2f} bps slippage."
+        )
+        await self.publish_event("ORDER_FILL_EVENT", receipt.model_dump())
+
 
 async def main():
     agent = ExecutionAgent()
     await agent.listen("APPROVED_TRADE_EVENT", agent.execute_order)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
