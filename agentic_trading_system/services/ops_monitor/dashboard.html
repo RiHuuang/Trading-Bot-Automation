@@ -173,10 +173,111 @@
     .muted {
       color: var(--muted);
     }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .mini-stat {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(9,17,31,.32);
+      padding: 12px;
+    }
+    .mini-stat .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+      margin-bottom: 6px;
+    }
+    .mini-stat .value {
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .action-strip {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .agent-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.08);
+      font-size: 12px;
+    }
+    .agent-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--agent-color, var(--accent));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-color, var(--accent)) 22%, transparent);
+      flex: none;
+    }
+    .agent-name {
+      color: var(--agent-color, var(--text));
+    }
+    .log-list {
+      display: grid;
+      gap: 8px;
+      max-height: 420px;
+      overflow: auto;
+    }
+    .log-line {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(6, 12, 22, .72);
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .log-source {
+      color: var(--agent-color, var(--accent));
+      font-weight: 700;
+      margin-right: 10px;
+    }
+    .log-timestamp {
+      color: var(--muted);
+      margin-right: 10px;
+    }
+    .log-message {
+      color: var(--text);
+      white-space: pre-wrap;
+    }
+    .rejection-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .rejection-item {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(9,17,31,.32);
+      padding: 10px 12px;
+    }
+    .rejection-item .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .rejection-item .value {
+      font-size: 18px;
+      font-weight: 700;
+    }
     @media (max-width: 1100px) {
       .span-3, .span-4, .span-6, .span-8 { grid-column: span 12; }
       .topbar { flex-direction: column; align-items: flex-start; }
       .status-badges { justify-content: flex-start; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .rejection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -216,16 +317,21 @@
         <div class="kpi-value" id="decision-count">-</div>
         <div class="sub">Judge decisions observed</div>
       </section>
-      <section class="card span-3">
-        <h2>Recent Fills</h2>
-        <div class="kpi-value" id="fill-count">-</div>
-        <div class="sub">Execution fills observed</div>
-      </section>
+	      <section class="card span-3">
+	        <h2>Recent Fills</h2>
+	        <div class="kpi-value" id="fill-count">-</div>
+	        <div class="sub">Execution fills observed</div>
+	      </section>
+	      <section class="card span-3">
+	        <h2>Binance Venue</h2>
+	        <div class="kpi-value" id="binance-env">-</div>
+	        <div class="sub" id="binance-env-sub">Loading Binance configuration</div>
+	      </section>
 
-      <section class="card span-3">
-        <h2>Wallet Value</h2>
-        <div class="kpi-value" id="wallet-estimate">-</div>
-        <div class="sub" id="wallet-sub">Approximate Binance wallet value</div>
+	      <section class="card span-3">
+	        <h2>Wallet Value</h2>
+	        <div class="kpi-value" id="wallet-estimate">-</div>
+	        <div class="sub" id="wallet-sub">Approximate Binance wallet value</div>
       </section>
       <section class="card span-3">
         <h2>Cash Balance</h2>
@@ -255,6 +361,51 @@
       <section class="card span-6">
         <h2>Recent Workflow Events</h2>
         <div id="events" class="list"></div>
+      </section>
+      <section class="card span-6">
+        <h2>Proposal Cadence</h2>
+        <div class="kpi-grid">
+          <div class="mini-stat">
+            <div class="label">Last Proposal</div>
+            <div class="value" id="proposal-last">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Last 15m</div>
+            <div class="value" id="proposal-15m">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Last 1h</div>
+            <div class="value" id="proposal-1h">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Avg Interval</div>
+            <div class="value" id="proposal-avg">-</div>
+          </div>
+        </div>
+        <div class="action-strip" id="proposal-actions"></div>
+      </section>
+      <section class="card span-6">
+        <h2>Scout Universe</h2>
+        <div class="kpi-grid">
+          <div class="mini-stat">
+            <div class="label">Top Picks</div>
+            <div class="value" id="scout-picked">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Liquidity Pass</div>
+            <div class="value" id="scout-liquidity">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">Catalyst Pass</div>
+            <div class="value" id="scout-catalyst">-</div>
+          </div>
+          <div class="mini-stat">
+            <div class="label">CG Status</div>
+            <div class="value" id="scout-provider">-</div>
+          </div>
+        </div>
+        <div class="action-strip" id="scout-symbols"></div>
+        <div class="rejection-grid" id="scout-rejections"></div>
       </section>
       <section class="card span-6">
         <h2>Recent Trades</h2>
@@ -315,6 +466,11 @@
       </section>
 
       <section class="card span-12">
+        <h2>System Log</h2>
+        <div id="system-logs" class="log-list"></div>
+      </section>
+
+      <section class="card span-12">
         <h2>Event Totals</h2>
         <div style="overflow:auto;">
           <table>
@@ -351,6 +507,18 @@
     const refreshNode = document.getElementById('refresh-rate');
     const killSwitchButton = document.getElementById('kill-switch-action');
     refreshNode.textContent = 'live';
+    const agentPalette = [
+      '#4da3ff',
+      '#38c793',
+      '#ffb020',
+      '#ff5d73',
+      '#8d7dff',
+      '#63d2ff',
+      '#f58bff',
+      '#7ee787',
+      '#ffd166',
+      '#ff7b72',
+    ];
 
     function fmtTime(value) {
       if (!value) return '-';
@@ -380,6 +548,40 @@
       });
     }
 
+    function fmtIsoTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+    }
+
+    function fmtDuration(value) {
+      if (value === null || value === undefined) return '-';
+      const seconds = Number(value);
+      if (Number.isNaN(seconds)) return '-';
+      if (seconds < 60) return `${Math.round(seconds)}s`;
+      if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+      return `${(seconds / 3600).toFixed(1)}h`;
+    }
+
+    function normalizeAgentKey(value) {
+      return String(value || 'system')
+        .replace(/-1$/, '')
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .toLowerCase();
+    }
+
+    function agentColor(value) {
+      const key = normalizeAgentKey(value);
+      let hash = 0;
+      for (let i = 0; i < key.length; i += 1) {
+        hash = ((hash << 5) - hash) + key.charCodeAt(i);
+        hash |= 0;
+      }
+      return agentPalette[Math.abs(hash) % agentPalette.length];
+    }
+
     function renderAgents(agents, staleAgents) {
       const node = document.getElementById('agents');
       if (!agents.length) {
@@ -389,10 +591,11 @@
       node.innerHTML = agents.map(agent => {
         const stale = staleAgents.includes(agent.agent);
         const cls = stale ? 'bad' : 'ok';
+        const color = agentColor(agent.agent);
         return `
-          <div class="item">
+          <div class="item" style="--agent-color:${color}">
             <div class="head">
-              <strong>${agent.agent}</strong>
+              <span class="agent-chip"><span class="agent-dot"></span><strong class="agent-name">${agent.agent}</strong></span>
               <span class="${cls}">${stale ? 'stale' : 'healthy'}</span>
             </div>
             <div class="meta">Last heartbeat ${fmtAgo(agent.timestamp)}</div>
@@ -456,7 +659,68 @@
       `).join('');
     }
 
-    function renderAccount(account) {
+    function renderProposalCadence(cadence) {
+      const breakdown = cadence.action_breakdown || {};
+      document.getElementById('proposal-last').textContent = cadence.last_proposal_at ? fmtAgo(cadence.last_proposal_at) : 'never';
+      document.getElementById('proposal-15m').textContent = fmtNumber(cadence.proposals_last_15m || 0, 0);
+      document.getElementById('proposal-1h').textContent = fmtNumber(cadence.proposals_last_1h || 0, 0);
+      document.getElementById('proposal-avg').textContent = fmtDuration(cadence.avg_interval_seconds);
+      document.getElementById('proposal-actions').innerHTML = ['BUY', 'SELL', 'HOLD'].map(action => `
+        <span class="agent-chip" style="--agent-color:${agentColor(action)}">
+          <span class="agent-dot"></span>
+          <span class="agent-name">${action}</span>
+          <strong>${fmtNumber(breakdown[action] || 0, 0)}</strong>
+        </span>
+      `).join('');
+    }
+
+    function renderSystemLogs(logs) {
+      const node = document.getElementById('system-logs');
+      if (!logs.length) {
+        node.innerHTML = '<div class="log-line"><span class="log-message">No Docker logs captured yet.</span></div>';
+        return;
+      }
+      node.innerHTML = logs.map(entry => `
+        <div class="log-line" style="--agent-color:${agentColor(entry.service || entry.display_name)}">
+          <span class="log-source">${entry.display_name || entry.service || 'system'}</span>
+          <span class="log-timestamp">${entry.timestamp ? fmtIsoTime(entry.timestamp) : ''}</span>
+          <span class="log-message">${entry.message || ''}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderScoutUniverse(universe) {
+      const summary = universe.summary || {};
+      const rejections = summary.rejections || {};
+      const providerStatus = universe.provider_status || {};
+      const symbols = universe.symbols || [];
+      document.getElementById('scout-picked').textContent = fmtNumber(symbols.length, 0);
+      document.getElementById('scout-liquidity').textContent = fmtNumber(summary.liquidity_survivors || 0, 0);
+      document.getElementById('scout-catalyst').textContent = fmtNumber(summary.catalyst_survivors || 0, 0);
+      document.getElementById('scout-provider').textContent = providerStatus.coingecko_backoff_active
+        ? `${fmtDuration(providerStatus.coingecko_backoff_remaining_seconds)}`
+        : 'OK';
+      document.getElementById('scout-symbols').innerHTML = symbols.length
+        ? symbols.slice(0, 8).map(item => `
+          <span class="agent-chip" style="--agent-color:${agentColor(item.symbol || item.base_asset)}">
+            <span class="agent-dot"></span>
+            <span class="agent-name">${item.symbol || item.base_asset}</span>
+            <strong>${fmtNumber(item.score, 1)}</strong>
+          </span>
+        `).join('')
+        : '<span class="tiny">No scout candidates published yet.</span>';
+      const rejectionEntries = Object.entries(rejections);
+      document.getElementById('scout-rejections').innerHTML = rejectionEntries.length
+        ? rejectionEntries.map(([key, value]) => `
+          <div class="rejection-item">
+            <div class="label">${key.replace(/_/g, ' ')}</div>
+            <div class="value">${fmtNumber(value, 0)}</div>
+          </div>
+        `).join('')
+        : '<div class="tiny">No scout rejection data yet.</div>';
+    }
+
+	    function renderAccount(account) {
       const quoteAsset = account.quote_asset || 'USDT';
       const balancesNode = document.getElementById('account-balances');
       const exchangeTradesNode = document.getElementById('exchange-trades');
@@ -521,9 +785,17 @@
           </tr>
         `).join('')
         : '<tr><td colspan="7" class="tiny">No recent Binance trades found.</td></tr>';
-    }
+	    }
 
-    function renderSnapshot(data) {
+	    function renderBinanceDetails(details) {
+	      const configuredSymbols = (details.symbols || []).join(', ') || details.symbol || '-';
+	      document.getElementById('binance-env').textContent = (details.environment || 'unknown').toUpperCase();
+	      document.getElementById('binance-env').className = `kpi-value ${details.environment === 'live' ? 'warn' : 'ok'}`;
+	      document.getElementById('binance-env-sub').textContent =
+	        `${details.stream_interval || '-'} stream | ${details.quote_asset || '-'} quote | ${details.validate_only ? 'validate-only' : 'trading enabled'} | ${configuredSymbols}`;
+	    }
+
+	    function renderSnapshot(data) {
       document.getElementById('updated-at').textContent = new Date().toLocaleTimeString();
       document.getElementById('kill-switch').textContent = data.kill_switch_active ? 'ACTIVE' : 'off';
       document.getElementById('kill-switch').className = data.kill_switch_active ? 'bad' : 'ok';
@@ -540,11 +812,12 @@
         ? `Stale agents: ${data.stale_agents.join(', ')}`
         : 'All known agent heartbeats are fresh';
 
-      document.getElementById('uptime').textContent = `${Math.floor((data.uptime_seconds || 0) / 60)}m`;
-      document.getElementById('decision-count').textContent = data.event_counts.decisions;
-      document.getElementById('fill-count').textContent = data.event_counts.fills;
+	      document.getElementById('uptime').textContent = `${Math.floor((data.uptime_seconds || 0) / 60)}m`;
+	      document.getElementById('decision-count').textContent = data.event_counts.decisions;
+	      document.getElementById('fill-count').textContent = data.event_counts.fills;
+	      renderBinanceDetails(data.binance_details || {});
 
-      document.getElementById('metric-heartbeats').textContent = data.event_counts.heartbeats;
+	      document.getElementById('metric-heartbeats').textContent = data.event_counts.heartbeats;
       document.getElementById('metric-alerts').textContent = data.event_counts.alerts;
       document.getElementById('metric-fills').textContent = data.event_counts.fills;
       document.getElementById('metric-decisions').textContent = data.event_counts.decisions;
@@ -555,8 +828,11 @@
       renderAgents(data.agents || [], data.stale_agents || []);
       renderAlerts(data.alerts || []);
       renderEvents(data.recent_events || []);
+      renderProposalCadence(data.proposal_cadence || {});
+      renderScoutUniverse(data.latest_universe || {});
       renderTrades(data.recent_trades || []);
       renderAccount(data.account_snapshot || {});
+      renderSystemLogs(data.system_logs || []);
     }
 
     async function refresh() {

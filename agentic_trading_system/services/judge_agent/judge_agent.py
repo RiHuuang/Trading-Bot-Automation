@@ -63,9 +63,45 @@ class JudgeAgent(BaseAgent):
 
         self.proposals[proposal.proposal_id] = proposal
         print(f"[JudgeAgent] Cached proposal {proposal.proposal_id}.")
+        if proposal.action == "HOLD":
+            await self.issue_hold_decision(proposal)
+            return
         pending_review = self.reviews.get(proposal.proposal_id)
         if pending_review is not None:
             await self.issue_decision(proposal, pending_review)
+
+    async def issue_hold_decision(self, proposal: TradeProposal):
+        review = ProposalReview(
+            review_id=self.new_id("review"),
+            proposal_id=proposal.proposal_id,
+            reviewer_agent="ReviewAgent",
+            model_name="skipped-hold",
+            generated_at=self.utc_timestamp(),
+            verdict="ABSTAIN",
+            confidence=1.0,
+            blocking=False,
+            concerns=["Review skipped because HOLD proposals are not sent to the critic."],
+            reasoning="The author proposed HOLD, so no critic LLM call was made.",
+            recommended_action="HOLD",
+        )
+        decision = JudgeDecision(
+            decision_id=self.new_id("decision"),
+            proposal_id=proposal.proposal_id,
+            source_agent=self.agent_name,
+            model_name="rule-based-hold-reject",
+            generated_at=self.utc_timestamp(),
+            verdict="REJECT",
+            approved_action=None,
+            confidence=max(0.6, proposal.confidence),
+            reasoning="The author returned HOLD, so there is no executable trade to approve.",
+            blockers=["Author returned HOLD, so there is no trade to execute."],
+            proposal=proposal,
+            review=review,
+        )
+        print(f"[JudgeAgent] REJECT for proposal {proposal.proposal_id} (HOLD shortcut).")
+        await self.publish_event("JUDGE_DECISION_EVENT", decision.model_dump())
+        self.proposals.pop(proposal.proposal_id, None)
+        self.reviews.pop(proposal.proposal_id, None)
 
     async def evaluate_review(self, data):
         try:

@@ -15,9 +15,10 @@ class LLMClient:
         self.provider = provider.lower()
         self.model_name = model_name
         if self.provider == "openai":
+            base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or "https://api.openai.com/v1"
             self.client = OpenAI(
                 api_key=os.getenv("OPENAI_API_KEY"),
-                base_url=os.getenv("OPENAI_BASE_URL") or None,
+                base_url=base_url,
             )
         else:
             self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))

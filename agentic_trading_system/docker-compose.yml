@@ -93,6 +93,8 @@ services:
       - POSTGRES_DB=trading_ledger
       - POSTGRES_USER=trader
       - POSTGRES_PASSWORD=securepassword
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "8080:8080"
     depends_on:

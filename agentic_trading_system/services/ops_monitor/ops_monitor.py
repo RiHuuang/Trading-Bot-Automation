@@ -1,10 +1,12 @@
 import asyncio
 import json
 import os
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlencode
 
 import psycopg2
 
@@ -37,9 +39,17 @@ class MonitorState:
         self.latest_universe: dict | None = None
         self.recent_events: list[dict] = []
         self.recent_trades: list[dict] = []
+        self.system_logs: list[dict] = []
         self.kill_switch_active: bool = False
         self.last_updated_at: float = self.started_at
         self.kill_switch_message: str | None = None
+        self.proposal_cadence: dict = {
+            "last_proposal_at": None,
+            "proposals_last_15m": 0,
+            "proposals_last_1h": 0,
+            "avg_interval_seconds": None,
+            "action_breakdown": {"BUY": 0, "SELL": 0, "HOLD": 0},
+        }
         self.account_snapshot: dict = {
             "available": False,
             "environment": None,
@@ -52,6 +62,16 @@ class MonitorState:
             "recent_exchange_trades": [],
             "last_refreshed_at": None,
             "error": None,
+        }
+        self.binance_details: dict = {
+            "environment": None,
+            "symbol": None,
+            "stream_interval": None,
+            "quote_asset": None,
+            "symbols": [],
+            "validate_only": None,
+            "rest_base": None,
+            "market_ws_base": None,
         }
 
     def push_alert(self, alert: dict):
@@ -93,12 +113,15 @@ def build_payload(state: MonitorState, stale_seconds: int) -> dict:
         "kill_switch_active": state.kill_switch_active,
         "kill_switch_message": state.kill_switch_message,
         "account_snapshot": state.account_snapshot,
+        "binance_details": state.binance_details,
         "agents": sorted(state.latest_heartbeats.values(), key=lambda item: item["agent"]),
         "alerts": state.latest_alerts,
         "recent_events": state.recent_events,
         "recent_trades": state.recent_trades,
+        "system_logs": state.system_logs,
         "latest_universe": state.latest_universe,
         "latest_proposals": state.latest_proposals,
+        "proposal_cadence": state.proposal_cadence,
         "latest_reviews": state.latest_reviews,
         "latest_decisions": state.latest_decisions,
         "latest_fills": state.latest_fills,
@@ -214,6 +237,17 @@ class OpsMonitor(BaseAgent):
         self.binance_config = load_binance_config()
         self.binance = BinanceRESTClient(self.binance_config)
         self.quote_asset = infer_quote_asset(self.binance_config.symbol)
+        configured_symbols = os.getenv("BINANCE_SYMBOLS", self.binance_config.symbol)
+        self.state.binance_details = {
+            "environment": self.binance_config.env,
+            "symbol": self.binance_config.symbol,
+            "stream_interval": self.binance_config.interval,
+            "quote_asset": self.quote_asset,
+            "symbols": [item.strip().upper() for item in configured_symbols.split(",") if item.strip()],
+            "validate_only": os.getenv("BINANCE_VALIDATE_ONLY", "false").lower() == "true",
+            "rest_base": self.binance_config.rest_base,
+            "market_ws_base": self.binance_config.market_ws_base,
+        }
         self.db_config = {
             "host": os.getenv("POSTGRES_HOST", "postgres"),
             "database": os.getenv("POSTGRES_DB", "trading_ledger"),
@@ -223,6 +257,25 @@ class OpsMonitor(BaseAgent):
         self.db_conn = None
         self.loop = None
         self.account_refresh_seconds = int(os.getenv("ACCOUNT_REFRESH_SECONDS", "20"))
+        self.system_log_tail = int(os.getenv("SYSTEM_LOG_TAIL_LINES", "120"))
+        self.docker_socket_path = os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+        compose_services = os.getenv(
+            "OPS_MONITOR_LOG_SERVICES",
+            "redis,postgres,ingest_agent,signal_agent,scout_agent,review_agent,judge_agent,ops_monitor,risk_agent,execution_agent,ledger_agent",
+        )
+        self.log_services = [item.strip() for item in compose_services.split(",") if item.strip()]
+        self.docker_project_name = os.getenv("COMPOSE_PROJECT_NAME")
+        self.service_color_names = {
+            "OpsMonitor": "ops_monitor",
+            "SignalAgent": "signal_agent",
+            "ReviewAgent": "review_agent",
+            "JudgeAgent": "judge_agent",
+            "RiskAgent": "risk_agent",
+            "ExecutionAgent": "execution_agent",
+            "LedgerAgent": "ledger_agent",
+            "IngestAgent": "ingest_agent",
+            "ScoutAgent": "scout_agent",
+        }
 
     def toggle_kill_switch(self, active: bool) -> bool:
         if self.loop is None:
@@ -407,6 +460,179 @@ class OpsMonitor(BaseAgent):
         self.state.account_snapshot = snapshot
         self.state.mark_updated()
 
+    def request_docker(self, path: str) -> bytes:
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            "Host: docker\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(self.docker_socket_path)
+            client.sendall(request.encode("utf-8"))
+            chunks = []
+            while True:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        response = b"".join(chunks)
+        header_block, _, body = response.partition(b"\r\n\r\n")
+        headers = {}
+        header_lines = header_block.decode("utf-8", errors="replace").split("\r\n")
+        for line in header_lines[1:]:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip().lower()
+        if headers.get("transfer-encoding") == "chunked":
+            body = self.decode_chunked_body(body)
+        return body
+
+    @staticmethod
+    def decode_chunked_body(body: bytes) -> bytes:
+        decoded = bytearray()
+        remaining = body
+        while remaining:
+            line, _, rest = remaining.partition(b"\r\n")
+            if not line:
+                break
+            chunk_size = int(line.decode("ascii"), 16)
+            if chunk_size == 0:
+                break
+            chunk = rest[:chunk_size]
+            decoded.extend(chunk)
+            remaining = rest[chunk_size + 2 :]
+        return bytes(decoded)
+
+    @staticmethod
+    def decode_multiplexed_logs(body: bytes) -> str:
+        cursor = 0
+        lines: list[str] = []
+        while cursor + 8 <= len(body):
+            frame_size = int.from_bytes(body[cursor + 4:cursor + 8], byteorder="big")
+            cursor += 8
+            frame = body[cursor:cursor + frame_size]
+            cursor += frame_size
+            if frame:
+                lines.append(frame.decode("utf-8", errors="replace"))
+        if lines:
+            return "".join(lines)
+        return body.decode("utf-8", errors="replace")
+
+    def list_docker_containers(self) -> list[dict]:
+        filters = {
+            "label": ["com.docker.compose.service"],
+        }
+        if self.docker_project_name:
+            filters["label"].append(f"com.docker.compose.project={self.docker_project_name}")
+        query = urlencode({"all": 0, "filters": json.dumps(filters)})
+        body = self.request_docker(f"/containers/json?{query}")
+        return json.loads(body.decode("utf-8") or "[]")
+
+    def load_system_logs(self):
+        if not os.path.exists(self.docker_socket_path):
+            self.state.system_logs = [
+                {
+                    "service": "ops_monitor",
+                    "display_name": "ops_monitor",
+                    "message": f"Docker socket not found at {self.docker_socket_path}. Mount it into ops_monitor to stream system logs.",
+                    "timestamp": None,
+                }
+            ]
+            self.state.mark_updated()
+            return
+
+        try:
+            containers = self.list_docker_containers()
+            container_map = {}
+            for container in containers:
+                labels = container.get("Labels", {})
+                service = labels.get("com.docker.compose.service")
+                if service:
+                    container_map[service] = container
+
+            logs: list[dict] = []
+            for service in self.log_services:
+                container = container_map.get(service)
+                if not container:
+                    continue
+                query = urlencode(
+                    {
+                        "stdout": 1,
+                        "stderr": 1,
+                        "timestamps": 1,
+                        "tail": max(1, self.system_log_tail // max(1, len(self.log_services))),
+                    }
+                )
+                body = self.request_docker(f"/containers/{container['Id']}/logs?{query}")
+                for raw_line in self.decode_multiplexed_logs(body).splitlines():
+                    if not raw_line.strip():
+                        continue
+                    timestamp = None
+                    message = raw_line
+                    if " " in raw_line:
+                        ts_candidate, remainder = raw_line.split(" ", 1)
+                        if "T" in ts_candidate and ts_candidate.endswith("Z"):
+                            timestamp = ts_candidate
+                            message = remainder
+                    logs.append(
+                        {
+                            "service": service,
+                            "display_name": container.get("Names", [f"/{service}"])[0].lstrip("/"),
+                            "message": message,
+                            "timestamp": timestamp,
+                        }
+                    )
+
+            logs.sort(key=lambda item: item["timestamp"] or "")
+            self.state.system_logs = logs[-self.system_log_tail :]
+        except Exception as exc:
+            self.state.system_logs = [
+                {
+                    "service": "ops_monitor",
+                    "display_name": "ops_monitor",
+                    "message": f"Failed loading Docker logs: {exc}",
+                    "timestamp": None,
+                }
+            ]
+        self.state.mark_updated()
+
+    def update_proposal_cadence(self):
+        proposals = sorted(
+            (
+                item for item in self.state.latest_proposals
+                if isinstance(item.get("generated_at"), (int, float))
+            ),
+            key=lambda item: float(item["generated_at"]),
+        )
+        timestamps = [float(item["generated_at"]) for item in proposals]
+        now = time.time()
+        action_breakdown = {"BUY": 0, "SELL": 0, "HOLD": 0}
+        for item in proposals:
+            action = str(item.get("action", "")).upper()
+            if action in action_breakdown:
+                action_breakdown[action] += 1
+
+        avg_interval = None
+        if len(timestamps) >= 2:
+            intervals = [
+                later - earlier
+                for earlier, later in zip(timestamps, timestamps[1:])
+                if later >= earlier
+            ]
+            if intervals:
+                avg_interval = round(sum(intervals) / len(intervals), 2)
+
+        self.state.proposal_cadence = {
+            "last_proposal_at": timestamps[-1] if timestamps else None,
+            "proposals_last_15m": sum(1 for ts in timestamps if now - ts <= 900),
+            "proposals_last_1h": sum(1 for ts in timestamps if now - ts <= 3600),
+            "avg_interval_seconds": avg_interval,
+            "action_breakdown": action_breakdown,
+        }
+        self.state.mark_updated()
+
     async def monitor_loop(self):
         last_account_refresh = 0.0
         while True:
@@ -417,6 +643,7 @@ class OpsMonitor(BaseAgent):
                 else "Trading approvals and execution are enabled."
             )
             await asyncio.to_thread(self.load_recent_trades)
+            await asyncio.to_thread(self.load_system_logs)
             if time.time() - last_account_refresh >= self.account_refresh_seconds:
                 await asyncio.to_thread(self.refresh_account_snapshot)
                 last_account_refresh = time.time()
@@ -478,6 +705,7 @@ class OpsMonitor(BaseAgent):
             self.state.event_counts["proposals"] += 1
             self.state.latest_proposals.append(data)
             self.state.latest_proposals = self.state.latest_proposals[-25:]
+            self.update_proposal_cadence()
             self.state.push_recent_event(
                 channel,
                 {
@@ -503,7 +731,15 @@ class OpsMonitor(BaseAgent):
             self.state.event_counts["universe_updates"] += 1
             self.state.latest_universe = data
             top_symbols = [item.get("symbol") for item in data.get("symbols", [])[:5]]
-            self.state.push_recent_event(channel, {"top_symbols": top_symbols})
+            self.state.push_recent_event(
+                channel,
+                {
+                    "top_symbols": top_symbols,
+                    "liquidity_survivors": data.get("summary", {}).get("liquidity_survivors", 0),
+                    "catalyst_survivors": data.get("summary", {}).get("catalyst_survivors", 0),
+                    "narrative_survivors": data.get("summary", {}).get("narrative_survivors", 0),
+                },
+            )
         elif channel == "ALERT_EVENT":
             self.state.push_alert(data)
 

@@ -59,6 +59,10 @@ class ReviewAgent(BaseAgent):
             print(f"[ReviewAgent] Invalid proposal payload: {exc}")
             return
 
+        if proposal.action == "HOLD":
+            print(f"[ReviewAgent] Skipping HOLD proposal {proposal.proposal_id} to reduce LLM usage.")
+            return
+
         snapshot = proposal.market_snapshot
         higher_timeframes = self.get_higher_timeframe_context(proposal)
         prompt = f"""
